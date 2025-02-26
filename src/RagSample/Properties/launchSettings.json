@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Build": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode Build"
+    },
+    "Search": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode Search"
+    }
+  }
+}
