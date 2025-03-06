@@ -1,0 +1,75 @@
+﻿@using System.Threading.Tasks.Dataflow
+@using Microsoft.Extensions.Hosting
+@using Microsoft.Extensions.Logging
+@using OllamaSharp.Models
+@using RagSample.Services
+@page "/"
+
+@inject ILogger<Index> Logger
+@inject QdrantClientFactory QdrantClientFactory
+@inject OllamaClientFactory OllamaClientFactory
+@implements IDisposable
+
+<h1>Hello, world!</h1>
+
+<label>Type a question to search : <input @bind=query /></label>
+<pre>@Out</pre>
+
+@code {
+    readonly CancellationTokenSource cts = new();
+    void IDisposable.Dispose() { using (cts) cts.Cancel(); }
+
+    string In, Out;
+    string query { get => In; set => buf.Post(In = value); }
+    BufferBlock<string> buf = new();
+
+    protected override void OnInitialized() => _ = ExecuteAsync(cts.Token);
+    async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using var qdrantClient = QdrantClientFactory.CreateQdrantClient();
+        using var ollamaClient = await OllamaClientFactory.CreateOllamaClientAsync(stoppingToken);
+
+        var collectionName = "ragsample";
+
+        var exists = await qdrantClient.CollectionExistsAsync(collectionName, stoppingToken);
+        if (!exists)
+            throw new Exception($"{collectionName} collection does not exist.");
+
+        while (await buf.OutputAvailableAsync(stoppingToken))
+        {
+            var query = buf.Receive();
+
+            if (string.IsNullOrWhiteSpace(query))
+                continue;
+
+            var response = await ollamaClient.EmbedAsync(new EmbedRequest()
+            {
+                Input = new string[] { query, }.ToList(),
+            }, stoppingToken).ConfigureAwait(false);
+
+            if (response.Embeddings.Count < 1)
+                continue;
+
+            var results = await qdrantClient.SearchAsync(
+                collectionName, response.Embeddings[0],
+                cancellationToken: stoppingToken)
+                .ConfigureAwait(false);
+
+            if (results.Any())
+            {
+                Out = "";
+                foreach (var eachResult in results)
+                {
+                    eachResult.Payload.TryGetValue("document_title", out var title);
+                    eachResult.Payload.TryGetValue("document_id", out var id);
+                    Out += $"* (Score - {eachResult.Score}) Document: {title} ({id}) matched.\n";
+                }
+            }
+            else
+            {
+                Out = "* No matched document.";
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+}
